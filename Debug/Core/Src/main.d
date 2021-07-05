@@ -58,18 +58,15 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/hts221/hts221.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/hts221/../Common/hsensor.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/hts221/../Common/tsensor.h \
- ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_hsensor.h \
  ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_gyro.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/lsm6dsl/lsm6dsl.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/lsm6dsl/../Common/accelero.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/lsm6dsl/../Common/gyro.h \
+ ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_accelero.h \
  ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_psensor.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/lps22hb.h \
  ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/../Common/psensor.h \
- ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/../Common/tsensor.h \
- ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_magneto.h \
- ../Drivers/BSP/B-L475E-IOT01/../Components/lis3mdl/lis3mdl.h \
- ../Drivers/BSP/B-L475E-IOT01/../Components/lis3mdl/../Common/magneto.h
+ ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/../Common/tsensor.h
 
 ../Core/Inc/main.h:
 
@@ -197,8 +194,6 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 
 ../Drivers/BSP/B-L475E-IOT01/../Components/hts221/../Common/tsensor.h:
 
-../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_hsensor.h:
-
 ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_gyro.h:
 
 ../Drivers/BSP/B-L475E-IOT01/../Components/lsm6dsl/lsm6dsl.h:
@@ -207,6 +202,8 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 
 ../Drivers/BSP/B-L475E-IOT01/../Components/lsm6dsl/../Common/gyro.h:
 
+../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_accelero.h:
+
 ../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_psensor.h:
 
 ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/lps22hb.h:
@@ -214,9 +211,3 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/../Common/psensor.h:
 
 ../Drivers/BSP/B-L475E-IOT01/../Components/lps22hb/../Common/tsensor.h:
-
-../Drivers/BSP/B-L475E-IOT01/stm32l475e_iot01_magneto.h:
-
-../Drivers/BSP/B-L475E-IOT01/../Components/lis3mdl/lis3mdl.h:
-
-../Drivers/BSP/B-L475E-IOT01/../Components/lis3mdl/../Common/magneto.h:

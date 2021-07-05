@@ -20,7 +20,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include <stdio.h>
 #include <stdbool.h>
-#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 #include "main.h"
@@ -28,51 +27,39 @@
 #include "stepper.h"
 #include "stm32l475e_iot01.h"
 #include "stm32l475e_iot01_tsensor.h"
-#include "stm32l475e_iot01_hsensor.h"
 #include "stm32l475e_iot01_gyro.h"
+#include "stm32l475e_iot01_accelero.h"
 #include "stm32l475e_iot01_psensor.h"
-#include "stm32l475e_iot01_magneto.h"
 
 /* Private typedef -----------------------------------------------------------*/
+#define SERVO_INIT 73
+#define STEP_DIR_INIT 1
+#define STEP_RPM_INIT 8
 
-#define TERMINAL_USE
-
-/* Update SSID and PASSWORD with own Access point settings */
-#define SSID     "Redmi"
-#define PASSWORD "BBMito98"
-
-uint8_t RemoteIP[] = {192,168,43,234};
-#define RemotePORT	8002
-
+/* WIFI settings */
 #define WIFI_WRITE_TIMEOUT 10000
 #define WIFI_READ_TIMEOUT  10000
+#define CONNECTION_TRIAL_MAX 10
 
-#define CONNECTION_TRIAL_MAX          10
+#define SSID     "Redmi"
+#define PASSWORD "BBMito98"
+#define RemotePORT	8002
 
+uint8_t RemoteIP[] = {192,168,43,234};
 uint8_t  MAC_Addr[6];
-  	    uint8_t  IP_Addr[4];
-  	    uint8_t TxData[] = "STM32 : Hello!\n";
-  	    int32_t Socket = -1;
-  	    uint16_t Datalen;
-  	    int32_t ret;
-  	    int16_t Trials = CONNECTION_TRIAL_MAX;
+uint8_t  IP_Addr[4];
+uint8_t wifi_data[70];
 
-
-#if defined (TERMINAL_USE)
-#define TERMOUT(...)  printf(__VA_ARGS__)
-#else
-#define TERMOUT(...)
-#endif
+int32_t Socket = -1;
+int16_t Trials = CONNECTION_TRIAL_MAX;
+osEvent retval;
+uint16_t Datalen;
+int32_t ret;
 
 /* Private variables ---------------------------------------------------------*/
-#if defined (TERMINAL_USE)
-extern UART_HandleTypeDef hDiscoUart;
-#endif /* TERMINAL_USE */
-static uint8_t RxData [500];
 
 
 /* Private function prototypes -----------------------------------------------*/
-#if defined (TERMINAL_USE)
 #ifdef __GNUC__
 /* With GCC, small TERMOUT (option LD Linker->Libraries->Small TERMOUT
    set to 'Yes') calls __io_putchar() */
@@ -80,17 +67,9 @@ static uint8_t RxData [500];
 #else
 #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
 #endif /* __GNUC__ */
-#endif /* TERMINAL_USE */
 
-/* Private function prototypes -----------------------------------------------*/
 extern  SPI_HandleTypeDef hspi;
-
-
-/* Private define ------------------------------------------------------------*/
-#define SERVO_INIT 73
-#define STEP_DIR_INIT 1
-#define STEP_RPM_INIT 8
-/* Private macro -------------------------------------------------------------*/
+extern UART_HandleTypeDef hDiscoUart;
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;
@@ -106,29 +85,18 @@ osSemaphoreId semaphoreServoSincHandle;
 osSemaphoreId semaphoreServoHandle;
 osSemaphoreId semaphoreStepperHandle;
 osSemaphoreId semaphoreMutexHandle;
-
+osSemaphoreId semaphoreMutexWifiDataHandle;
 
 osThreadId defaultTaskHandle;
 osThreadId ServoTaskHandle;
 osThreadId StepperTaskHandle;
-osThreadId DistanceTaskHandle;
+osThreadId SendDataTaskHandle;
 osThreadId ManagerTaskHandle;
 osThreadId SerialTaskHandle;
 osThreadId SensorsTaskHandle;
 osThreadId WifiTaskHandle;
 
-
-int stepper_rpm;
-int stepper_dir;
-int16_t pDataXYZ[3] = {0};
-float pGyroDataXYZ[3] = {0};
-uint8_t command[1];
-bool problem = false;
-bool connection = false;
-bool on = false;
-
-double var;
-/* USER CODE END PV */
+osMessageQId QueueDataHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -141,92 +109,87 @@ static void MX_USART3_UART_Init(void);
 void StartDefaultTask(void const * argument);
 void StartServo(void const * argument);
 void StartStepper(void const * argument);
-void StartDistance(void const * argument);
+void StartSendData(void const * argument);
 void StartManager(void const * argument);
 void StartSensors(void const * argument);
 void StartWifi(void const * argument);
 
-
-/* Private user code ---------------------------------------------------------*/
-
-
-/* this function generates ACTIVE delay in microseconds */
+/* this function generates ACTIVE delay in microseconds --> useful for stepper motor */
 void delayStepM (uint16_t us)
 {
   __HAL_TIM_SET_COUNTER(&htim8, 0);
   while (__HAL_TIM_GET_COUNTER(&htim8) < us);
 }
 
-
+/* this is an interrupt raised when there something arrives on arduino serial */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	osSemaphoreRelease(semaphoreSerialHandle);
 }
 
+/* this function call an interrupt for Wifi */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  switch (GPIO_Pin)
-  {
+  switch (GPIO_Pin) {
     case (GPIO_PIN_1):
-    {
-      SPI_WIFI_ISR();
-      break;
-    }
+    		SPI_WIFI_ISR();
+    		break;
     default:
-    {
-      break;
-    }
+    	break;
   }
 }
 
+/* Interrupt for something ???? */
 void SPI3_IRQHandler(void)
 {
   HAL_SPI_IRQHandler(&hspi);
 }
 
+/* This is an override useful for printf */
 int _write(int file, char *ptr, int len)
 {
 	HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, 10);
 	return len;
 }
 
+/* global variables */
+
+uint8_t stepper_rpm;
+bool stepper_dir;
+
+int16_t pDataXYZ[3] = {0};
+int temperature;
+int pressure;
+
+uint8_t command[1];
+bool problem = false;
+bool connection = false;
+bool on = false;
+
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Init STM32 board */
   HAL_Init();
-  /* Configure LED2 */
   BSP_LED_Init(LED2);
   MX_USART1_UART_Init();
 
   /* Configure the system clock */
    SystemClock_Config();
 
-  /* USER CODE BEGIN Init */
-  BSP_GYRO_Init();
-  BSP_MAGNETO_Init();
   BSP_ACCELERO_Init();
-  BSP_HSENSOR_Init();
   BSP_TSENSOR_Init();
   BSP_PSENSOR_Init();
-  /* USER CODE END Init */
 
-  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM2_Init();
   MX_TIM8_Init();
   MX_USART3_UART_Init();
 
-  /* USER CODE BEGIN 2 */
+  /* START TIMERS */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_Base_Start(&htim8);
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* RTOS_SEMAPHORES */
   osSemaphoreDef(semaphoreWifiSinc);
   semaphoreWifiSincHandle = osSemaphoreCreate(osSemaphore(semaphoreWifiSinc), 1);
 
@@ -239,9 +202,6 @@ int main(void)
   osSemaphoreDef(semaphoreServoSinc);
   semaphoreServoSincHandle = osSemaphoreCreate(osSemaphore(semaphoreServoSinc), 1);
 
-  //osSemaphoreDef(semaphoreBuzzer);
-  //semaphoreBuzzerHandle = osSemaphoreCreate(osSemaphore(semaphoreBuzzer), 1);
-
   osSemaphoreDef(semaphoreStepper);
   semaphoreStepperHandle = osSemaphoreCreate(osSemaphore(semaphoreStepper), 1);
 
@@ -251,16 +211,12 @@ int main(void)
   osSemaphoreDef(semaphoreMutex);
   semaphoreMutexHandle = osSemaphoreCreate(osSemaphore(semaphoreMutex), 1);
 
+  /* RTOS_QUEUES */
+  osMessageQDef(QueueData, 1, sizeof(uint8_t*));
+  QueueDataHandle = osMessageCreate(osMessageQ(QueueData), NULL);
 
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
+  /* RTOS_THREADS */
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
   /* definition and creation of defaultTask */
   osThreadDef(defaultTask, StartDefaultTask, osPriorityIdle, 0, 128);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
@@ -273,9 +229,9 @@ int main(void)
   osThreadDef(StepperTask, StartStepper, osPriorityNormal, 0, 128);
   StepperTaskHandle = osThreadCreate(osThread(StepperTask), NULL);
 
-  /* definition and creation of DistanceTask */
-  osThreadDef(DistanceTask, StartDistance, osPriorityNormal, 0, 128);
-  DistanceTaskHandle = osThreadCreate(osThread(DistanceTask), NULL);
+  /* definition and creation of SendDataTask */
+  osThreadDef(SendDataTask, StartSendData, osPriorityNormal, 0, 128);
+  SendDataTaskHandle = osThreadCreate(osThread(SendDataTask), NULL);
 
   /* definition and creation of ManagerTask */
   osThreadDef(ManagerTask, StartManager, osPriorityAboveNormal, 0, 128);
@@ -289,17 +245,12 @@ int main(void)
    osThreadDef(WifiTask, StartWifi, osPriorityNormal, 0, 128);
    WifiTaskHandle = osThreadCreate(osThread(WifiTask), NULL);
 
-
   HAL_UART_Receive_IT(&huart3, command, 1);
-
 
   /* Start scheduler */
   osKernelStart();
 
-  /* Infinite loop */
-  while (1) {
-
-  }
+  while (1) {}
 }
 
 
@@ -457,7 +408,6 @@ static void MX_USART1_UART_Init(void)
 }
 
 /* USART3 Initialization Function */
-
 static void MX_USART3_UART_Init(void)
 {
   huart3.Instance = USART3;
@@ -548,7 +498,7 @@ void StartServo(void const * argument)
 	}
 }
 
-/* USER CODE BEGIN Header_StepperStart */
+/* USER CODE BEGIN Header_StartStepper */
 void StartStepper(void const * argument)
 {
   for(;;)
@@ -565,12 +515,12 @@ void StartStepper(void const * argument)
   }
 }
 
+/* USER CODE BEGIN Header_StartWifi */
 void StartWifi(void const * argument)
 {
 	for(;;) {
-		osSemaphoreWait(semaphoreWifiSincHandle, osWaitForever);
 
-		#if defined (TERMINAL_USE)
+		osSemaphoreWait(semaphoreWifiSincHandle, osWaitForever);
   	    /* Initialize all configured peripherals */
   	    hDiscoUart.Instance = DISCOVERY_COM1;
   	    hDiscoUart.Init.BaudRate = 115200;
@@ -582,19 +532,7 @@ void StartWifi(void const * argument)
   	    hDiscoUart.Init.OverSampling = UART_OVERSAMPLING_16;
   	    hDiscoUart.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   	    hDiscoUart.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-
   	    BSP_COM_Init(COM1, &hDiscoUart);
-  	  #endif /* TERMINAL_USE */
-
-  	    printf("****** WIFI Module in TCP Client mode demonstration ****** \r\n\n");
-  	    printf("TCP Client Instructions :\r\n");
-  	    printf("1- Make sure your Phone is connected to the same network that\r\n");
-  	    printf("   you configured using the Configuration Access Point.\r\n");
-  	    printf("2- Create a server by using the android application TCP Server\r\n");
-  	    printf("   with port(8002).\r\n");
-  	    printf("3- Get the Network Name or IP Address of your Android from the step 2.\r\n\n");
-
-
 
   	    /*Initialize  WIFI module */
   	    if(WIFI_Init() ==  WIFI_STATUS_OK)
@@ -654,46 +592,28 @@ void StartWifi(void const * argument)
   	      BSP_LED_On(LED2);
   	    }
 	}
-
-
 }
 
-/* USER CODE BEGIN Header_StartDistance */
-void StartDistance(void const * argument)
+/* USER CODE BEGIN Header_StartSendData */
+void StartSendData(void const * argument)
 {
   	 for (;;)
-	    {
-	    	osDelay(3000);
-	    	while (connection == false) {
-	    		osSemaphoreWait(semaphoreWifiHandle, osWaitForever);
-	    	}
-	    		//osSemaphoreRelease(semaphoreWifiHandle);
-
-
-	      if(Socket != -1)
-	      {
-	        /*ret = WIFI_ReceiveData(Socket, RxData, sizeof(RxData)-1, &Datalen, WIFI_READ_TIMEOUT);
-	        if(ret == WIFI_STATUS_OK)
-	        {
-	          if(Datalen > 0)
-	          {
-	            RxData[Datalen]=0;
-	            //TERMOUT("Received: %s\r\n",RxData);*/
-	            ret = WIFI_SendData(Socket, TxData, sizeof(TxData), &Datalen, WIFI_WRITE_TIMEOUT);
-	            if (ret != WIFI_STATUS_OK)
-	            {
-	              //TERMOUT("> ERROR : Failed to Send Data, connection closed\r\n");
-	            	connection = false;
-	            }
-	         // }
-	        //}
-	        /*else
-	        {
-	          //TERMOUT("> ERROR : Failed to Receive Data, connection closed\r\n");
-	          break;
-	        }*/
-	      }
-	    }
+  	 {
+  		 osDelay(3000);
+  		 while (connection == false) {
+  			 osSemaphoreWait(semaphoreWifiHandle, osWaitForever);
+  		 }
+  		 if(Socket != -1)
+  		 {
+  			 retval = osMessageGet(QueueDataHandle, 200);
+	         ret = WIFI_SendData(Socket, (uint8_t*) retval.value.p, 70, &Datalen, WIFI_WRITE_TIMEOUT);
+	         if (ret != WIFI_STATUS_OK)
+	         {
+	        	 printf("> ERROR : Failed to Send Data, connection closed\r\n");
+	        	 connection = false;
+	         }
+  		 }
+  	 }
 }
 
 
@@ -702,13 +622,15 @@ void StartSensors(void const * argument)
 {
   for(;;)
   {
-	  //BSP_MAGNETO_GetXYZ(pDataXYZ);
-	  //printf("MAGNETO: X = %d     Y = %d     Z = %d\r\n\n", pDataXYZ[0], pDataXYZ[1], pDataXYZ[2]);
-	  //BSP_GYRO_GetXYZ(pGyroDataXYZ);
-	  //printf("GYRO: X = %f     Y = %f     Z = %f\r\n\n", pGyroDataXYZ[0], pGyroDataXYZ[1], pGyroDataXYZ[2]);
 	  BSP_ACCELERO_AccGetXYZ(pDataXYZ);
+	  temperature = (int) BSP_TSENSOR_ReadTemp();
+	  pressure = (int) BSP_PSENSOR_ReadPressure();
+	  sprintf(wifi_data, "Temperatura: %d \r\nPressione: %d \r\nInclinazione: %d \r\n\n", temperature, pressure, pDataXYZ[0]);
+	  osMessagePut(QueueDataHandle, (uint32_t) &wifi_data, 200);
+
 	  osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
-	  if ((pDataXYZ[0] < -200) || (pDataXYZ[0] > 200) || (pDataXYZ[3] < 0)) {
+
+	  if ((pDataXYZ[0] < -200) || (pDataXYZ[0] > 200) || (pDataXYZ[3] < 0) || (temperature > 50)) {
 		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
 		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET);
 		  problem = true;
@@ -718,15 +640,10 @@ void StartSensors(void const * argument)
 		  problem = false;
 		  osSemaphoreRelease(semaphoreStepperHandle);
 	  }
-	  osSemaphoreRelease(semaphoreMutexHandle);
-	  //printf("ACCELERO: X = %d     Y = %d     Z = %d\r\n\n", pDataXYZ[0], pDataXYZ[1], pDataXYZ[2]); */
-	  /*printf("HUMIDITY: %.2f \r\n", BSP_HSENSOR_ReadHumidity());
 
-	  printf("TEMPERATURE: %.2f °C\r\n", BSP_TSENSOR_ReadTemp());*/
-	  //BSP_TSENSOR_ReadTemp();
-	  //BSP_PSENSOR_ReadPressure();
-	  //printf("PRESSURE: %.2f \r\n\n", BSP_PSENSOR_ReadPressure());
-	  osDelay(500);
+	  osSemaphoreRelease(semaphoreMutexHandle);
+
+	  osDelay(1000);
   }
 }
 
@@ -735,7 +652,6 @@ void StartManager(void const * argument)
 {
   for(;;)
   {
-	  //printf("Sono manager\r\n");
 	  osSemaphoreWait(semaphoreSerialHandle, osWaitForever);
 	  HAL_UART_Receive_IT(&huart3, command, 1);
 	  osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
@@ -800,7 +716,6 @@ void StartManager(void const * argument)
 				//printf("Segnale non codificato \r\n");
 				break;
 	  	}
-	  //printf("ACCELERO: X = %d     Y = %d     Z = %d\r\n\n", pDataXYZ[0], pDataXYZ[1], pDataXYZ[2]);
 	  osSemaphoreRelease(semaphoreMutexHandle);
   }
 }
