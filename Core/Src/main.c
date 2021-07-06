@@ -81,9 +81,9 @@ UART_HandleTypeDef huart1;
 osSemaphoreId semaphoreWifiHandle;
 osSemaphoreId semaphoreWifiSincHandle;
 osSemaphoreId semaphoreSerialHandle;
-osSemaphoreId semaphoreServoSincHandle;
+osSemaphoreId semaphoreServoPrivHandle;
 osSemaphoreId semaphoreServoHandle;
-osSemaphoreId semaphoreStepperHandle;
+osSemaphoreId semaphoreStepperPrivHandle;
 osSemaphoreId semaphoreMutexHandle;
 osSemaphoreId semaphoreMutexWifiDataHandle;
 
@@ -121,7 +121,7 @@ void delayStepM (uint16_t us)
   while (__HAL_TIM_GET_COUNTER(&htim8) < us);
 }
 
-/* this is an interrupt raised when there something arrives on arduino serial */
+/* this is an INTERRUPT raised when there something arrives on arduino serial */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	osSemaphoreRelease(semaphoreSerialHandle);
@@ -153,7 +153,6 @@ int _write(int file, char *ptr, int len)
 }
 
 /* global variables */
-
 uint8_t stepper_rpm;
 bool stepper_dir;
 
@@ -162,9 +161,9 @@ int temperature;
 int pressure;
 
 uint8_t command[1];
-bool problem = false;
-bool connection = false;
-bool on = false;
+bool problem;
+bool connection;
+bool on;
 
 int main(void)
 {
@@ -199,11 +198,11 @@ int main(void)
   osSemaphoreDef(semaphoreSerial);
   semaphoreSerialHandle = osSemaphoreCreate(osSemaphore(semaphoreSerial), 1);
 
-  osSemaphoreDef(semaphoreServoSinc);
-  semaphoreServoSincHandle = osSemaphoreCreate(osSemaphore(semaphoreServoSinc), 1);
+  osSemaphoreDef(semaphoreServoPriv);
+  semaphoreServoPrivHandle = osSemaphoreCreate(osSemaphore(semaphoreServoPriv), 1);
 
-  osSemaphoreDef(semaphoreStepper);
-  semaphoreStepperHandle = osSemaphoreCreate(osSemaphore(semaphoreStepper), 1);
+  osSemaphoreDef(semaphoreStepperPriv);
+  semaphoreStepperPrivHandle = osSemaphoreCreate(osSemaphore(semaphoreStepperPriv), 1);
 
   osSemaphoreDef(semaphoreServo);
   semaphoreServoHandle = osSemaphoreCreate(osSemaphore(semaphoreServo), 1);
@@ -245,7 +244,11 @@ int main(void)
    osThreadDef(WifiTask, StartWifi, osPriorityNormal, 0, 128);
    WifiTaskHandle = osThreadCreate(osThread(WifiTask), NULL);
 
+  /* Init variables */
   HAL_UART_Receive_IT(&huart3, command, 1);
+  problem = false;
+  connection = false;
+  on = false;
 
   /* Start scheduler */
   osKernelStart();
@@ -477,7 +480,7 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void const * argument)
 {
   for(;;){
-	  //printf("VAFFANCULO \r\n\n");
+	  //printf("DO NOTHING \r\n");
   }
 }
 
@@ -486,15 +489,24 @@ void StartServo(void const * argument)
 {
 	htim2.Instance->CCR1 = SERVO_INIT;
 	for(;;) {
-	  osSemaphoreWait(semaphoreServoSincHandle, osWaitForever);
-	  while(htim2.Instance->CCR1 > SERVO_INIT) {
-		  htim2.Instance->CCR1 -=1;
-		  osDelay(70);
-	  }
-	  while(htim2.Instance->CCR1 < SERVO_INIT) {
-		  htim2.Instance->CCR1 +=1;
-		  osDelay(70);
-	  }
+		/* Inizio sezione critica.
+		 * Le variabili condivise sono htim2.Instance->CCR1 e ON. */
+		osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
+
+		/* Il semaforo ServoPriv è un semaforo privato.
+		 * Se le condizioni sono vere allora il semaforo verrà incrementato e la successiva wait sarà passante.
+		 * Se una delle condizioni è false allora il semaforo non verrà incrementato e la successiva wait sarà bloccante. */
+		if ((htim2.Instance->CCR1 != SERVO_INIT) && (on == true)) {
+			if (htim2.Instance->CCR1 > SERVO_INIT)
+				htim2.Instance->CCR1 -=2;
+			else
+				htim2.Instance->CCR1 +=2;
+
+			osSemaphoreRelease(semaphoreServoPrivHandle);
+		}
+		osSemaphoreRelease(semaphoreMutexHandle); //fine sezione critica
+		osSemaphoreWait(semaphoreServoPrivHandle, osWaitForever);
+		osDelay(30);
 	}
 }
 
@@ -503,15 +515,21 @@ void StartStepper(void const * argument)
 {
   for(;;)
   {
+	  /* Inizio sezione critica.
+	   * Le variabili condivise sono PROBLEM, ON, DIR, RPM. */
+
 	  osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
+
+	  /* Il semaforoStepperPriv è un semaforo privato.
+	   * Se è tutto ok allora verrà incrementato in modo che la wait successiva sarà passante.
+	   * Se non è tutto ok allora il semaforo non verra incrementato quindi la wait successiva sarà bloccante. */
 	  if((problem == false) && (on == true)){
 		  stepper_step_angle(10, stepper_dir, stepper_rpm);
-		  osSemaphoreRelease(semaphoreMutexHandle);
-		  osDelay(20);
-	  } else {
-		  osSemaphoreRelease(semaphoreMutexHandle);
-		  osSemaphoreWait(semaphoreStepperHandle, osWaitForever);
+		  osSemaphoreRelease(semaphoreStepperPrivHandle);
 	  }
+	  osSemaphoreRelease(semaphoreMutexHandle); // fine sezione critica
+	  osSemaphoreWait(semaphoreStepperPrivHandle, osWaitForever);
+	  osDelay(20);
   }
 }
 
@@ -520,8 +538,13 @@ void StartWifi(void const * argument)
 {
 	for(;;) {
 
-		osSemaphoreWait(semaphoreWifiSincHandle, osWaitForever);
-  	    /* Initialize all configured peripherals */
+		/* Il threadWifi resta bloccato fin quando la connessione è già instaurata. Per sbloccarlo
+		 * deve essere cliccato il tasto opportuno quando la connessione non è attiva. */
+
+		while (connection == true)
+			osSemaphoreWait(semaphoreWifiSincHandle, osWaitForever);
+
+		/* Initialize all configured peripherals */
   	    hDiscoUart.Instance = DISCOVERY_COM1;
   	    hDiscoUart.Init.BaudRate = 115200;
   	    hDiscoUart.Init.WordLength = UART_WORDLENGTH_8B;
@@ -534,7 +557,7 @@ void StartWifi(void const * argument)
   	    hDiscoUart.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
   	    BSP_COM_Init(COM1, &hDiscoUart);
 
-  	    /*Initialize  WIFI module */
+
   	    if(WIFI_Init() ==  WIFI_STATUS_OK)
   	    {
   	      printf("> WIFI Module Initialized.\r\n");
@@ -554,7 +577,6 @@ void StartWifi(void const * argument)
   	        if(WIFI_GetIP_Address(IP_Addr) == WIFI_STATUS_OK)
   	        {
   	          printf("> es-wifi module got IP Address : %d.%d.%d.%d\r\n", IP_Addr[0], IP_Addr[1], IP_Addr[2], IP_Addr[3]);
-
   	          printf("> Trying to connect to Server: %d.%d.%d.%d:%d ...\r\n", RemoteIP[0], RemoteIP[1], RemoteIP[2],RemoteIP[3], RemotePORT);
 
   	          while (Trials--)
@@ -564,6 +586,8 @@ void StartWifi(void const * argument)
   	              printf("> TCP Connection opened successfully.\r\n");
   	              Socket = 0;
   	              connection = true;
+
+  	              /* Quando la connessione viene instaurata correttamente viene fatto partire il threadSendData */
   	              osSemaphoreRelease(semaphoreWifiHandle);
   	              break;
   	            }
@@ -599,8 +623,8 @@ void StartSendData(void const * argument)
 {
   	 for (;;)
   	 {
-  		 osDelay(3000);
-  		 while (connection == false) {
+  		 /* Se non c'è connessione è inutile inviare dati al server quindi il threadSendData si blocca */
+  		 if (connection == false) {
   			 osSemaphoreWait(semaphoreWifiHandle, osWaitForever);
   		 }
   		 if(Socket != -1)
@@ -609,10 +633,11 @@ void StartSendData(void const * argument)
 	         ret = WIFI_SendData(Socket, (uint8_t*) retval.value.p, 70, &Datalen, WIFI_WRITE_TIMEOUT);
 	         if (ret != WIFI_STATUS_OK)
 	         {
-	        	 printf("> ERROR : Failed to Send Data, connection closed\r\n");
+	        	 printf("\r\n> ERROR : Failed to Send Data, connection closed\r\n");
 	        	 connection = false;
 	         }
   		 }
+  		osDelay(3000);
   	 }
 }
 
@@ -628,6 +653,9 @@ void StartSensors(void const * argument)
 	  sprintf(wifi_data, "Temperatura: %d \r\nPressione: %d \r\nInclinazione: %d \r\n\n", temperature, pressure, pDataXYZ[0]);
 	  osMessagePut(QueueDataHandle, (uint32_t) &wifi_data, 200);
 
+	  /* Sezione critica protetta da mutex.
+	   * Le variabile condivisa è PROBLEM */
+
 	  osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
 
 	  if ((pDataXYZ[0] < -200) || (pDataXYZ[0] > 200) || (pDataXYZ[3] < 0) || (temperature > 50)) {
@@ -638,12 +666,14 @@ void StartSensors(void const * argument)
 		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
 		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
 		  problem = false;
-		  osSemaphoreRelease(semaphoreStepperHandle);
+
+		  /* Se il problema viene risolto viene fatto ripartire il motore stepper */
+		  osSemaphoreRelease(semaphoreStepperPrivHandle);
 	  }
 
-	  osSemaphoreRelease(semaphoreMutexHandle);
+	  osSemaphoreRelease(semaphoreMutexHandle); // fine sezione critica
 
-	  osDelay(1000);
+	  osDelay(500);
   }
 }
 
@@ -652,25 +682,32 @@ void StartManager(void const * argument)
 {
   for(;;)
   {
+	  /* semaforo su cui si blocca il threadManager in attesa di arrivo di comandi su seriale arduino */
 	  osSemaphoreWait(semaphoreSerialHandle, osWaitForever);
 	  HAL_UART_Receive_IT(&huart3, command, 1);
+
+	  /* Inizio sezione critica protetta da mutex. L
+	   * Le variabili condivise con altri thread sono RPM, DIR, ON, htim2.Instance->CCR1 */
+
 	  osSemaphoreWait(semaphoreMutexHandle, osWaitForever);
 	  switch (command[0]) {
-			case (100): //accensione
+			case (100):
 				if(stepper_rpm == 0) {
 					//printf("Accensione \r\n");
 					on = true;
 					stepper_rpm = STEP_RPM_INIT;
-					osSemaphoreRelease(semaphoreStepperHandle);
+
+					/* Al click del tasto di accensione viene fatto partire il thread che fa ruotare il motore stepper */
+					osSemaphoreRelease(semaphoreStepperPrivHandle);
 				} else {
-					on = false;
 					//printf("Spegnimento \r\n");
+					on = false;
 					stepper_rpm = 0;
 				}
 				break;
 			case (101):
-					//printf("func/stop \r\n"); // func/stop
-					break;
+				//printf("func/stop \r\n");
+				break;
 			case (102):
 				//printf("Vol+ \r\n");
 				if(stepper_rpm <= 13)
@@ -678,16 +715,22 @@ void StartManager(void const * argument)
 				break;
 			case (105):
 				//printf("Destra \r\n");
-				htim2.Instance->CCR1 = SERVO_INIT + 12;
-				osSemaphoreRelease(semaphoreServoSincHandle);
+				if (on == true)
+					htim2.Instance->CCR1 = SERVO_INIT + 12;
+
+				/* Quando le ruote curvano viene fatto partire il thread che si occupa di riaddrizzarle */
+				osSemaphoreRelease(semaphoreServoPrivHandle);
 				break;
 			case (104):
-				//printf("play/pausa \r\n"); //play/pausa
+				//printf("play/pausa \r\n");
 				break;
 			case (103):
 				//printf("Sinistra \r\n");
-				htim2.Instance->CCR1 = SERVO_INIT - 12;
-				osSemaphoreRelease(semaphoreServoSincHandle);
+				if (on == true)
+					htim2.Instance->CCR1 = SERVO_INIT - 12;
+
+				/* Quando le ruote curvano viene fatto partire il thread che si occupa di riaddrizzarle */
+				osSemaphoreRelease(semaphoreServoPrivHandle);
 				break;
 			case (106):
 				//printf("Indietro \r\n"); //freccia giù
@@ -703,20 +746,22 @@ void StartManager(void const * argument)
 				stepper_dir = 0;
 				break;
 			case (109):
-				//printf("EQ \r\n"); //EQ
+				//printf("EQ \r\n");
 				break;
 			case (110):
-				//printf("repeat \r\n"); //rept
+				//printf("repeat \r\n");
+
+				/* Al click del tasto viene fatto partire il thread che instaura la connessione con il server TCP */
 				osSemaphoreRelease(semaphoreWifiSincHandle);
 				break;
 			case (0):
-				//printf("0 \r\n"); //0
+				//printf("0 \r\n");
 				break;
 			default :
 				//printf("Segnale non codificato \r\n");
 				break;
 	  	}
-	  osSemaphoreRelease(semaphoreMutexHandle);
+	  osSemaphoreRelease(semaphoreMutexHandle); // Fine sezione critica
   }
 }
 
@@ -730,7 +775,6 @@ void Error_Handler(void)
 }
 
 
-#if defined (TERMINAL_USE)
 /**
   * @brief  Retargets the C library TERMOUT function to the USART.
   * @param  None
@@ -744,7 +788,6 @@ PUTCHAR_PROTOTYPE
 
   return ch;
 }
-#endif /* TERMINAL_USE */
 
 
 #ifdef  USE_FULL_ASSERT
