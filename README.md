@@ -1,4 +1,4 @@
-# EmbeddedSystemProject
+# RemoteControlledCarSTM32
 This is a university project developed in 2021. Goal of this project was the creation of a multi-threading system using a real-time OS (FreeRTOS).
 This project wants to prototype a remote controlled car which is able to send its internal status to a TCP server via wi-fi.
 Is has been developed in STM32CubeIDE.
