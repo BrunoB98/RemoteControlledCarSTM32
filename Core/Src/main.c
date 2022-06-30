@@ -56,9 +56,6 @@ osEvent retval;
 uint16_t Datalen;
 int32_t ret;
 
-/* Private variables ---------------------------------------------------------*/
-
-
 /* Private function prototypes -----------------------------------------------*/
 #ifdef __GNUC__
 /* With GCC, small TERMOUT (option LD Linker->Libraries->Small TERMOUT
@@ -68,7 +65,7 @@ int32_t ret;
 #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
 #endif /* __GNUC__ */
 
-extern  SPI_HandleTypeDef hspi;
+extern SPI_HandleTypeDef hspi;
 extern UART_HandleTypeDef hDiscoUart;
 
 /* Private variables ---------------------------------------------------------*/
@@ -86,6 +83,7 @@ osSemaphoreId semaphoreServoHandle;
 osSemaphoreId semaphoreStepperPrivHandle;
 osSemaphoreId semaphoreMutexHandle;
 osSemaphoreId semaphoreMutexWifiDataHandle;
+osSemaphoreId semaphoreMutexDatasHandle;
 
 osThreadId defaultTaskHandle;
 osThreadId ServoTaskHandle;
@@ -96,7 +94,6 @@ osThreadId SerialTaskHandle;
 osThreadId SensorsTaskHandle;
 osThreadId WifiTaskHandle;
 
-osMessageQId QueueDataHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -139,7 +136,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   }
 }
 
-/* Interrupt for something ???? */
 void SPI3_IRQHandler(void)
 {
   HAL_SPI_IRQHandler(&hspi);
@@ -210,9 +206,8 @@ int main(void)
   osSemaphoreDef(semaphoreMutex);
   semaphoreMutexHandle = osSemaphoreCreate(osSemaphore(semaphoreMutex), 1);
 
-  /* RTOS_QUEUES */
-  osMessageQDef(QueueData, 1, sizeof(uint8_t*));
-  QueueDataHandle = osMessageCreate(osMessageQ(QueueData), NULL);
+  osSemaphoreDef(semaphoreMutexDatas);
+  semaphoreMutexDatasHandle = osSemaphoreCreate(osSemaphore(semaphoreMutexDatas), 1);
 
   /* RTOS_THREADS */
 
@@ -504,9 +499,10 @@ void StartServo(void const * argument)
 
 			osSemaphoreRelease(semaphoreServoPrivHandle);
 		}
+
 		osSemaphoreRelease(semaphoreMutexHandle); //fine sezione critica
 		osSemaphoreWait(semaphoreServoPrivHandle, osWaitForever);
-		osDelay(30);
+		osDelay(50);
 	}
 }
 
@@ -629,8 +625,9 @@ void StartSendData(void const * argument)
   		 }
   		 if(Socket != -1)
   		 {
-  			 retval = osMessageGet(QueueDataHandle, 200);
-	         ret = WIFI_SendData(Socket, (uint8_t*) retval.value.p, 70, &Datalen, WIFI_WRITE_TIMEOUT);
+  			 osSemaphoreWait(semaphoreMutexDatasHandle, osWaitForever);
+	         ret = WIFI_SendData(Socket, (uint8_t*) wifi_data, 70, &Datalen, WIFI_WRITE_TIMEOUT);
+	         osSemaphoreRelease(semaphoreMutexDatasHandle);
 	         if (ret != WIFI_STATUS_OK)
 	         {
 	        	 printf("\r\n> ERROR : Failed to Send Data, connection closed\r\n");
@@ -650,8 +647,10 @@ void StartSensors(void const * argument)
 	  BSP_ACCELERO_AccGetXYZ(pDataXYZ);
 	  temperature = (int) BSP_TSENSOR_ReadTemp();
 	  pressure = (int) BSP_PSENSOR_ReadPressure();
+	  osSemaphoreWait(semaphoreMutexDatasHandle, osWaitForever);
 	  sprintf(wifi_data, "Temperatura: %d \r\nPressione: %d \r\nInclinazione: %d \r\n\n", temperature, pressure, pDataXYZ[0]);
-	  osMessagePut(QueueDataHandle, (uint32_t) &wifi_data, 200);
+	  osSemaphoreRelease(semaphoreMutexDatasHandle);
+	  //osMessagePut(QueueDataHandle, (uint32_t) &wifi_data, 200);
 
 	  /* Sezione critica protetta da mutex.
 	   * Le variabile condivisa è PROBLEM */
@@ -672,7 +671,6 @@ void StartSensors(void const * argument)
 	  }
 
 	  osSemaphoreRelease(semaphoreMutexHandle); // fine sezione critica
-
 	  osDelay(500);
   }
 }
@@ -716,7 +714,7 @@ void StartManager(void const * argument)
 			case (105):
 				//printf("Destra \r\n");
 				if (on == true)
-					htim2.Instance->CCR1 = SERVO_INIT + 12;
+					htim2.Instance->CCR1 = SERVO_INIT + 14;
 
 				/* Quando le ruote curvano viene fatto partire il thread che si occupa di riaddrizzarle */
 				osSemaphoreRelease(semaphoreServoPrivHandle);
@@ -727,7 +725,7 @@ void StartManager(void const * argument)
 			case (103):
 				//printf("Sinistra \r\n");
 				if (on == true)
-					htim2.Instance->CCR1 = SERVO_INIT - 12;
+					htim2.Instance->CCR1 = SERVO_INIT - 14;
 
 				/* Quando le ruote curvano viene fatto partire il thread che si occupa di riaddrizzarle */
 				osSemaphoreRelease(semaphoreServoPrivHandle);

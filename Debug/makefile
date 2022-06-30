@@ -71,8 +71,8 @@ all: main-build
 main-build: AutoMachine.elf secondary-outputs
 
 # Tool invocations
-AutoMachine.elf: $(OBJS) $(USER_OBJS) C:\Users\bruno\Downloads\Auto\ Machine\STM32L475VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "AutoMachine.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\bruno\Downloads\Auto Machine\STM32L475VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="AutoMachine.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+AutoMachine.elf: $(OBJS) $(USER_OBJS) D:\Documents\UNI\Anno\ 4\Sistemi\ embedded\ e\ real\ time\Progetto\Auto\ Machine\STM32L475VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "AutoMachine.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"D:\Documents\UNI\Anno 4\Sistemi embedded e real time\Progetto\Auto Machine\STM32L475VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="AutoMachine.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
